@@ -16,5 +16,5 @@ You can specify any or all of these things:
 - partial filename, e.g.  secret 
 
 
-Future: I will add a try icon, here's some info for my use:
+Future: I will add a tray icon, here's some info for my use:
 https://www.c-sharpcorner.com/UploadFile/f9f215/how-to-minimize-your-application-to-system-tray-in-C-Sharp/
