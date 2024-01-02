@@ -8,6 +8,7 @@ A small C# app to clear specific Recent/QuickAccess links in Windows 10
 This application runs every n minutes (default 15) and processes two folders:
 1. shortcuts in c:\users\USER\AppData\Roaming\Microsoft\Windows\Recent
 2. "jump list" files (*.automaticDestinations-ms) in c:\users\USER\AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations
+3. registry keys related to the Explorer MRU dropdown HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths
 
 You supply a list of things you don't want to show up in Recent / QuickAccess, and this app will delete the links to them.
 You can specify any or all of these things:
