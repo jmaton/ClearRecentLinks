@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace ClearRecentLinks
 {
@@ -105,12 +106,12 @@ namespace ClearRecentLinks
 					string JumpListFileExtension = ConfigurationManager.AppSettings["JumpListFileExtension"];
 
 					// get list of patterns we want to delete links for
-					var removeThese = new List<string>();
+					var removalPatterns = new List<string>();
 					foreach (string x in ConfigurationManager.AppSettings["RemoveThese"].Split('|'))
 					{
 						string s = x.Trim().ToLower();
 						if (!String.IsNullOrEmpty(s))
-							removeThese.Add(s);
+							removalPatterns.Add(s);
 					}
 
 					// files to be deleted later
@@ -132,7 +133,7 @@ namespace ClearRecentLinks
 							if (link != null && !String.IsNullOrEmpty(link.Target.Path))
 							{
 								string linkTarget = link.Target.Path.ToLower();
-								foreach (string x in removeThese)
+								foreach (string x in removalPatterns)
 								{
 									if (linkTarget.Contains(x))
 									{
@@ -149,7 +150,7 @@ namespace ClearRecentLinks
 					foreach (string linkFile in Directory.GetFiles(jumpListPath, JumpListFileExtension))
 					{
 						string fileContents = File.ReadAllText(linkFile);
-						foreach (string x in removeThese)
+						foreach (string x in removalPatterns)
 						{
 							if (fileContents.ToLower().Contains(x))
 							{
@@ -182,8 +183,12 @@ namespace ClearRecentLinks
 					//}
 					//MessageBox.Show(message);
 
+					// do the registry
+					int regValueCount = CleanRegistry(removalPatterns);
+
 					// put a status message on the UI
-					UpdateStatusText(string.Format("{0} {1} : Deleted {2} files.", DateTime.Now.ToShortDateString(), DateTime.Now.ToShortTimeString(), filesToDelete.Count));
+					UpdateStatusText(string.Format("{0} {1} : Deleted {2} files, {3} registry values.", 
+						DateTime.Now.ToShortDateString(), DateTime.Now.ToShortTimeString(), filesToDelete.Count, regValueCount));
 
 					System.Diagnostics.Debug.WriteLine(string.Format("RunTask() done for thread \"{0}\"", Thread.CurrentThread.Name));
 				}
@@ -202,6 +207,59 @@ namespace ClearRecentLinks
 				System.Diagnostics.Debug.WriteLine(string.Format("Thread named \"{0}\" was unable to enter RunTask", Thread.CurrentThread.Name));
 			}
 		}
+
+		private int CleanRegistry(List<string> removalPatterns)
+		{
+			// Computer\HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths
+			int deletedCount = 0;
+			string keyName = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths";
+			using (RegistryKey key = Registry.CurrentUser.OpenSubKey(keyName, true))
+			{
+				if (key != null)
+				{
+					var vNames = key.GetValueNames();
+					foreach (var valueName in vNames)
+					{
+						foreach (string x in removalPatterns)
+                        {
+							if (Convert.ToString(key.GetValue(valueName)).ToLower().Contains(x))
+							{
+								key.DeleteValue(valueName);
+								deletedCount++;
+								break;
+							}
+						}
+					}
+
+					// rename them remaining values else they won't be visible
+					// e.g. if value names are  url1, url2, url4, url5    then url4 and url5 will not be visible in Explorer droplist
+					if (deletedCount > 0)
+					{
+						vNames = key.GetValueNames();
+						for (int i = 0; i < vNames.Length; i++)
+                        {
+							string desiredName = string.Format("url{0}", i + 1);
+							string currentName = vNames[i];
+							if (currentName != desiredName)
+                            {
+								// according to microsoft docs you cannot programmatically rename a registry key,
+								// you have to create a new one and delete the old one
+								//string debug = string.Format("{0} --> {1}", currentName, desiredName);
+								//Console.WriteLine(debug);
+								key.SetValue(desiredName, key.GetValue(currentName));
+								key.DeleteValue(currentName);
+							}
+
+						}
+
+					}
+
+				}
+			}
+
+			return deletedCount;
+		}
+		
 
 		private void UpdateStatusText(string text)
 		{
