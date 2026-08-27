@@ -13,6 +13,9 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
+    - name: Install .NET 4.6 Targeting Pack
+      run: choco install netfx-4.6-devpack -y
+
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
