@@ -2,6 +2,7 @@
 using System.Configuration;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices; // Added for COM release and COMException
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -44,7 +45,7 @@ namespace ClearRecentLinks
 
 		private void RestartTaskThread()
 		{
-			if (taskThread != null)
+			if (taskThread != null && taskThread.IsAlive)
 			{
 				System.Diagnostics.Debug.WriteLine("Aborting existing worker thread...");
 				taskThread.Abort();
@@ -54,6 +55,7 @@ namespace ClearRecentLinks
 			labelStatus.Text = string.Format("Worker thread startup delay ({0} seconds)...", STARTUP_DELAY_SECONDS);
 
 			taskThread = new Thread(ThreadTask);
+            taskThread.SetApartmentState(ApartmentState.STA); // CRITICAL: Required for Shell32 COM interop
 			taskThread.IsBackground = true;
 			taskThread.Name = "Worker thread: Clear Recent/JumpList items";
 			taskThread.Start();
@@ -77,7 +79,7 @@ namespace ClearRecentLinks
 			}
 			catch (ThreadAbortException)
 			{
-				// do nothing
+				// Thread restarted or stopped; do nothing
 			}
 		}
 
@@ -105,6 +107,11 @@ namespace ClearRecentLinks
 					string jumpListPath = Path.Combine(userProfile, ConfigurationManager.AppSettings["JumpListPath"]);
 					string JumpListFileExtension = ConfigurationManager.AppSettings["JumpListFileExtension"];
 
+					System.Diagnostics.Debug.WriteLine("userProfile=" + userProfile);
+					System.Diagnostics.Debug.WriteLine("RecentLinkPath=" + recentLinksPath);
+					System.Diagnostics.Debug.WriteLine("JumpListPath=" + jumpListPath);
+					System.Diagnostics.Debug.WriteLine("JumpListFileExtension=" + JumpListFileExtension);
+
 					// get list of patterns we want to delete links for
 					var removalPatterns = new List<string>();
 					foreach (string x in ConfigurationManager.AppSettings["RemoveThese"].Split('|'))
@@ -125,55 +132,105 @@ namespace ClearRecentLinks
 					Type shell32Type = Type.GetTypeFromProgID("Shell.Application");
 					shell = Activator.CreateInstance(shell32Type);
 					Shell32.Folder s32Folder = (Shell32.Folder)shell32Type.InvokeMember("NameSpace", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { recentLinksPath });
-					foreach (Shell32.FolderItem2 item in s32Folder.Items())
-					{
-						if (item.IsLink)
-						{
-							var link = (Shell32.ShellLinkObject)item.GetLink;
-							if (link != null && !String.IsNullOrEmpty(link.Target.Path))
-							{
-								string linkTarget = link.Target.Path.ToLower();
-								foreach (string x in removalPatterns)
-								{
-									if (linkTarget.Contains(x))
-									{
-										filesToDelete.Add(item.Path);
-										break;
-									}
-								}
-							}
-						}
-					}
 
+                    if (s32Folder != null)
+                    {
+                        foreach (Shell32.FolderItem2 item in s32Folder.Items())
+                        {
+                            try
+                            {
+                                if (item.IsLink)
+                                {
+                                    Shell32.ShellLinkObject link = null;
+                                    try
+                                    {
+                                        link = (Shell32.ShellLinkObject)item.GetLink;
+                                    }
+                                    catch (Exception)
+                                    {
+                                        // Unable to resolve link interface
+                                    }
 
-					// process "Jump List" files
-					foreach (string linkFile in Directory.GetFiles(jumpListPath, JumpListFileExtension))
-					{
-						string fileContents = File.ReadAllText(linkFile);
-						foreach (string x in removalPatterns)
-						{
-							if (fileContents.ToLower().Contains(x))
-							{
-								filesToDelete.Add(linkFile);
-								break;
-							}
-						}
-					}
+                                    if (link != null)
+                                    {
+                                        string targetPath = null;
+                                        try
+                                        {
+                                            targetPath = link.Target?.Path;
+                                        }
+                                        catch (Exception)
+                                        {
+                                            // Inaccessible or broken target path
+                                        }
 
-					// now do the deletions
-					foreach (string file in filesToDelete)
-					{
-						try
-						{
-							System.Diagnostics.Debug.WriteLine(string.Format("Deleting file: {0}", file));
-							File.Delete(file);
-						}
-						catch (Exception ex)
-						{
-							System.Diagnostics.Debug.WriteLine(string.Format("exception: {0}", ex.Message));
-							// future: write to a log file?
-						}
-					}
+                                        if (!String.IsNullOrEmpty(targetPath))
+                                        {
+                                            string linkTarget = targetPath.ToLower();
+                                            foreach (string x in removalPatterns)
+                                            {
+                                                if (linkTarget.Contains(x))
+                                                {
+                                                    filesToDelete.Add(item.Path);
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        Marshal.FinalReleaseComObject(link);
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine("Error evaluating item: " + ex.Message);
+                            }
+                            finally
+                            {
+                                if (item != null)
+                                    Marshal.FinalReleaseComObject(item);
+                            }
+                        }
+
+                        Marshal.FinalReleaseComObject(s32Folder);
+                    }
+
+                    // Process Jump List files
+                    if (Directory.Exists(jumpListPath))
+                    {
+                        foreach (string linkFile in Directory.GetFiles(jumpListPath, JumpListFileExtension))
+                        {
+                            try
+                            {
+                                string fileContents = File.ReadAllText(linkFile);
+                                foreach (string x in removalPatterns)
+                                {
+                                    if (fileContents.ToLower().Contains(x))
+                                    {
+                                        filesToDelete.Add(linkFile);
+                                        break;
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine("Error reading jump list file: " + ex.Message);
+                            }
+                        }
+                    }
+
+                    // Perform deletions
+                    foreach (string file in filesToDelete)
+                    {
+                        try
+                        {
+                            System.Diagnostics.Debug.WriteLine(string.Format("Deleting file: {0}", file));
+                            File.Delete(file);
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine(string.Format("exception: {0}", ex.Message));
+                        }
+                    }
 
 					// debug
 					//string message = "files to delete";
@@ -192,12 +249,16 @@ namespace ClearRecentLinks
 
 					System.Diagnostics.Debug.WriteLine(string.Format("RunTask() done for thread \"{0}\"", Thread.CurrentThread.Name));
 				}
+				catch (Exception ex)
+				{
+                    System.Diagnostics.Debug.WriteLine("RunTask unhandled exception: " + ex.Message);
+				}
 				finally
 				{
-					// I don't know if this ReleaseComObject() call is necessary; I can't find a definitive answer.
-					// but it doesn't appear to hurt.
 					if (shell != null)
-						System.Runtime.InteropServices.Marshal.ReleaseComObject(shell);
+                    {
+                        Marshal.FinalReleaseComObject(shell);
+                    }
 
 					Monitor.Exit(myLock);
 				}
@@ -259,16 +320,21 @@ namespace ClearRecentLinks
 
 			return deletedCount;
 		}
-		
 
-		private void UpdateStatusText(string text)
-		{
-			labelStatus.Invoke((MethodInvoker)delegate
-			{
-				// now running on UI thread
-				labelStatus.Text = text;
-			});
-		}
+        private void UpdateStatusText(string text)
+        {
+            if (labelStatus.InvokeRequired)
+            {
+                labelStatus.Invoke((MethodInvoker)delegate
+                {
+                    labelStatus.Text = text;
+                });
+            }
+            else
+            {
+                labelStatus.Text = text;
+            }
+        }
 
 		private void listBox1_KeyUp(object sender, KeyEventArgs e)
 		{
