@@ -148,7 +148,7 @@
             this.Controls.Add(this.groupBox1);
             this.Controls.Add(this.btnRunNow);
             this.Name = "Form1";
-            this.Text = "Clear Win10 Recent/JumpList entries    v1.1";
+            this.Text = "Clear Win10 Recent/JumpList entries    v1.2";
             this.groupBox1.ResumeLayout(false);
             this.groupBox1.PerformLayout();
             this.groupBox2.ResumeLayout(false);
